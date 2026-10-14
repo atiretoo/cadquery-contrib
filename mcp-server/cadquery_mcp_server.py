@@ -76,7 +76,7 @@ async def list_tools() -> list[Tool]:
                 "Execute CadQuery Python code and return a rendered image of the 3D model. "
                 "The code should use show_object() to output shapes, or assign the final result to 'result'. "
                 "Example: result = cq.Workplane('XY').box(1, 2, 3). "
-                "Returns SVG by default (works headlessly, no display required). "
+                "Returns PNG by default (works headlessly, no display required). "
                 "Use 'view' to specify camera angle, or 'multi_view' to get multiple angles at once."
             ),
             inputSchema={
@@ -96,6 +96,12 @@ async def list_tools() -> list[Tool]:
                         "type": "boolean",
                         "description": "If true, returns multiple images from different angles (isometric, front, top, right). Useful for complex models.",
                         "default": False,
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "Image format: png (default) or svg",
+                        "enum": ["png", "svg"],
+                        "default": "png",
                     },
                     "width": {
                         "type": "integer",
@@ -223,11 +229,33 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent | 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
+def _encode_image(svg_content: str, image_format: str, width: int, height: int) -> ImageContent:
+    """Encode SVG content into the requested ImageContent format (PNG or SVG)."""
+    if image_format == "png":
+        try:
+            import resvg_py
+            png_bytes = resvg_py.svg_to_bytes(
+                svg_string=svg_content,
+                background="#ffffff",
+                width=width,
+                height=height,
+            )
+            png_data = base64.standard_b64encode(png_bytes).decode("ascii")
+            return ImageContent(type="image", data=png_data, mimeType="image/png")
+        except ImportError:
+            # Fall back to SVG if resvg_py is not available
+            pass
+
+    svg_data = base64.standard_b64encode(svg_content.encode("utf-8")).decode("ascii")
+    return ImageContent(type="image", data=svg_data, mimeType="image/svg+xml")
+
+
 async def _handle_render(arguments: dict[str, Any]) -> list[TextContent | ImageContent]:
-    """Execute CadQuery code and return rendered SVG image(s)."""
+    """Execute CadQuery code and return rendered image(s)."""
     code = arguments["code"]
     view = arguments.get("view", "isometric")
     multi_view = arguments.get("multi_view", False)
+    image_format = arguments.get("format", "png").lower()
     width = arguments.get("width", 800)
     height = arguments.get("height", 600)
     show_hidden = arguments.get("show_hidden", True)
@@ -262,8 +290,7 @@ async def _handle_render(arguments: dict[str, Any]) -> list[TextContent | ImageC
 
             for view_name in views_to_render:
                 svg_content = _render_svg(shape, view_name, width, height, show_hidden)
-                svg_data = base64.standard_b64encode(svg_content.encode("utf-8")).decode("utf-8")
-                results.append(ImageContent(type="image", data=svg_data, mimeType="image/svg+xml"))
+                results.append(_encode_image(svg_content, image_format, width, height))
 
             # Add a text description of the views
             results.insert(0, TextContent(
@@ -274,8 +301,7 @@ async def _handle_render(arguments: dict[str, Any]) -> list[TextContent | ImageC
         else:
             # Single view
             svg_content = _render_svg(shape, view, width, height, show_hidden)
-            svg_data = base64.standard_b64encode(svg_content.encode("utf-8")).decode("utf-8")
-            return [ImageContent(type="image", data=svg_data, mimeType="image/svg+xml")]
+            return [_encode_image(svg_content, image_format, width, height)]
 
     except SyntaxError as e:
         return [TextContent(type="text", text=f"Syntax error: {e}")]
@@ -423,9 +449,48 @@ async def _handle_export(arguments: dict[str, Any]) -> list[TextContent | ImageC
         return [TextContent(type="text", text=f"Error: {type(e).__name__}: {e}")]
 
 
+import sys
+import anyio
+import json
+
+class InterceptingStdin:
+    """Wraps stdin to intercept and rewrite Antigravity's non-standard JSON-RPC probes."""
+    def __init__(self, original_stdin):
+        self.original_stdin = original_stdin
+        self._iter = None
+
+    def __aiter__(self):
+        self._iter = self.original_stdin.__aiter__()
+        return self
+
+    async def __anext__(self):
+        if self._iter is None:
+            self._iter = self.original_stdin.__aiter__()
+        while True:
+            line = await self._iter.__anext__()
+            try:
+                data = json.loads(line)
+                if isinstance(data, dict) and data.get("method") == "server/discover":
+                    # Antigravity probe: manual response to stdout to avoid SDK pre-init crash
+                    if "id" in data:
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": data["id"],
+                            "result": {"status": "ok"}
+                        }
+                        sys.stdout.write(json.dumps(response) + "\n")
+                        sys.stdout.flush()
+                    continue
+            except Exception:
+                pass
+            return line
+
 async def main():
     """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
+    original_stdin = anyio.wrap_file(sys.stdin)
+    patched_stdin = InterceptingStdin(original_stdin)
+    
+    async with stdio_server(stdin=patched_stdin) as (read_stream, write_stream):
         await server.run(
             read_stream,
             write_stream,
