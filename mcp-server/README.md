@@ -203,6 +203,14 @@ Scripts should either:
    show_object(box)
    ```
 
+### Why not `cadquery.vis.show()` or `cadquery.fig.show()`?
+
+You may come across `show()` functions in CadQuery documentation:
+- `cadquery.vis.show()` opens an interactive desktop GUI window using VTK. This blocks script execution (`inter.Start()`) until a user manually closes the window, requires local display drivers (failing in headless or remote server environments), and does not return image payloads to the caller.
+- `cadquery.fig.show()` starts a local Trame/Vuetify web server and opens a new browser tab for interactive human viewing.
+
+Neither function returns image data over the Model Context Protocol. AI assistants like Claude cannot see desktop windows or browser sessions. The MCP server's `render` tool solves this by headlessly extracting the OpenCASCADE geometry in memory, projecting it to vector lines (SVG), and rasterizing it to PNG via `resvg-py` so the model can inspect and verify the 3D model inline within the chat.
+
 ## License
 
 Apache License 2.0 - see [LICENSE](../LICENSE) for details.
