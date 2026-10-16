@@ -342,6 +342,24 @@ show_object(box)
         assert "10.0000" in text
         assert "15.0000" in text
 
+    def test_script_with_print_redirects_stdout(self, capsys):
+        """Test that print statements in scripts are redirected to stderr to avoid corrupting stdout."""
+        from cadquery_mcp_server import _handle_render
+
+        code = """
+import cadquery as cq
+print("debug output from script")
+result = cq.Workplane('XY').box(1, 1, 1)
+"""
+        result = asyncio.run(_handle_render({"code": code}))
+        captured = capsys.readouterr()
+
+        # stdout must remain clean for JSON-RPC transport
+        assert captured.out == ""
+        # print output should be redirected to stderr
+        assert "debug output from script" in captured.err
+        assert result[0].type == "image"
+
 
 class TestMCPServerViews:
     """Test multi-view and custom view angle functionality."""

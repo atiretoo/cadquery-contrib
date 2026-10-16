@@ -37,6 +37,8 @@ Configuration in Claude Code (~/.claude/settings.json):
 
 import asyncio
 import base64
+from contextlib import redirect_stdout
+import sys
 import tempfile
 import traceback
 from typing import Any
@@ -192,6 +194,17 @@ def _extract_shape(build_result, env):
     return None
 
 
+def _execute_script(code: str):
+    """Execute CadQuery code via CQGI with stdout redirected to stderr.
+
+    Redirecting stdout prevents user print() statements or library output from
+    corrupting the JSON-RPC stream over stdio.
+    """
+    with redirect_stdout(sys.stderr):
+        model = cqgi.parse(code)
+        return model.build()
+
+
 def _render_svg(shape, view_name: str, width: int, height: int, show_hidden: bool = True) -> str:
     """Render a shape to SVG from a specific view angle."""
     projection_dir = VIEWS.get(view_name, VIEWS["isometric"])
@@ -234,8 +247,7 @@ async def _handle_render(arguments: dict[str, Any]) -> list[TextContent | ImageC
 
     try:
         # Parse and execute the script using CQGI
-        model = cqgi.parse(code)
-        result = model.build()
+        result = _execute_script(code)
 
         if result.exception:
             return [TextContent(
@@ -288,8 +300,7 @@ async def _handle_inspect(arguments: dict[str, Any]) -> list[TextContent | Image
     code = arguments["code"]
 
     try:
-        model = cqgi.parse(code)
-        result = model.build()
+        result = _execute_script(code)
 
         if result.exception:
             return [TextContent(
@@ -363,7 +374,8 @@ async def _handle_get_parameters(arguments: dict[str, Any]) -> list[TextContent 
     code = arguments["code"]
 
     try:
-        model = cqgi.parse(code)
+        with redirect_stdout(sys.stderr):
+            model = cqgi.parse(code)
         params = model.metadata.parameters
 
         if not params:
@@ -393,8 +405,7 @@ async def _handle_export(arguments: dict[str, Any]) -> list[TextContent | ImageC
     export_format = arguments.get("format")
 
     try:
-        model = cqgi.parse(code)
-        result = model.build()
+        result = _execute_script(code)
 
         if result.exception:
             return [TextContent(
@@ -415,7 +426,8 @@ async def _handle_export(arguments: dict[str, Any]) -> list[TextContent | ImageC
             shape = shape.val()
 
         # Export
-        export(shape, filename, exportType=export_format)
+        with redirect_stdout(sys.stderr):
+            export(shape, filename, exportType=export_format)
 
         return [TextContent(type="text", text=f"Exported to: {filename}")]
 
