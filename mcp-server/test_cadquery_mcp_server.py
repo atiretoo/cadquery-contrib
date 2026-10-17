@@ -497,7 +497,7 @@ result = cq.Workplane('XY').box(20, 20, 10).faces('>Z').workplane().hole(5)
         assert len(svg_with) > len(svg_without)
 
     def test_views_dictionary_exists(self):
-        """Test that VIEWS dictionary is properly defined."""
+        """Test that VIEWS dictionary is properly defined with CAD Z-up directions."""
         from cadquery_mcp_server import VIEWS
 
         expected_views = ["isometric", "front", "back", "top", "bottom", "left", "right", "isometric_back"]
@@ -505,3 +505,72 @@ result = cq.Workplane('XY').box(20, 20, 10).faces('>Z').workplane().hole(5)
             assert view in VIEWS
             # Each view should be a 3-tuple (projection direction)
             assert len(VIEWS[view]) == 3
+
+    def test_camera_cs_z_up(self):
+        """Test that camera coordinate systems enforce Z-up CAD conventions."""
+        from cadquery_mcp_server import _compute_camera_cs, VIEWS
+
+        # Isometric: Z should point Up in screen coordinates (positive Y component of YDirection)
+        cs_iso = _compute_camera_cs(VIEWS["isometric"])
+        assert cs_iso.YDirection().Z() > 0.7  # Z component is ~0.816
+
+        # Front view: X should be screen Right (+X), Z should be screen Up (+Z)
+        cs_front = _compute_camera_cs(VIEWS["front"])
+        assert cs_front.XDirection().X() > 0.99
+        assert cs_front.YDirection().Z() > 0.99
+
+        # Top view: X should be screen Right (+X), Y should be screen Up (+Y)
+        cs_top = _compute_camera_cs(VIEWS["top"])
+        assert cs_top.XDirection().X() > 0.99
+        assert cs_top.YDirection().Y() > 0.99
+
+        # Right view: Y should be screen Right (+Y), Z should be screen Up (+Z)
+        cs_right = _compute_camera_cs(VIEWS["right"])
+        assert cs_right.XDirection().Y() > 0.99
+        assert cs_right.YDirection().Z() > 0.99
+
+    def test_dynamic_axes_generation(self):
+        """Test dynamic triad generation and orientation adaptation."""
+        from cadquery_mcp_server import _compute_camera_cs, _generate_dynamic_axes, VIEWS
+
+        cs_iso = _compute_camera_cs(VIEWS["isometric"])
+        axes_iso = _generate_dynamic_axes(cs_iso.XDirection(), cs_iso.YDirection(), 800.0, 600.0)
+
+        assert 'id="coordinate-triad"' in axes_iso
+        assert "marker-end=\"url(#arrow-red)\"" in axes_iso
+        assert "marker-end=\"url(#arrow-green)\"" in axes_iso
+        assert "marker-end=\"url(#arrow-blue)\"" in axes_iso
+        assert ">X<" in axes_iso
+        assert ">Y<" in axes_iso
+        assert ">Z<" in axes_iso
+
+        # Front view: Y is in line of sight (depth), should render depth bullseye circle
+        cs_front = _compute_camera_cs(VIEWS["front"])
+        axes_front = _generate_dynamic_axes(cs_front.XDirection(), cs_front.YDirection(), 800.0, 600.0)
+        assert "<circle" in axes_front
+        assert ">Y<" in axes_front
+
+    def test_render_show_axes_option(self):
+        """Test that show_axes option toggles the coordinate triad in render output."""
+        from cadquery_mcp_server import _handle_render
+
+        code = "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 10)"
+
+        # Render with axes (default)
+        result_with_axes = asyncio.run(_handle_render({
+            "code": code,
+            "format": "svg",
+            "show_axes": True,
+        }))
+        svg_with = base64.b64decode(result_with_axes[0].data).decode("utf-8")
+        assert 'id="coordinate-triad"' in svg_with
+
+        # Render without axes
+        result_without_axes = asyncio.run(_handle_render({
+            "code": code,
+            "format": "svg",
+            "show_axes": False,
+        }))
+        svg_without = base64.b64decode(result_without_axes[0].data).decode("utf-8")
+        assert 'id="coordinate-triad"' not in svg_without
+
