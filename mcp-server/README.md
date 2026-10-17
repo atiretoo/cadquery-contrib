@@ -5,6 +5,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 ## Features
 
 - **render** - Execute CadQuery code and return rendered images of the 3D model (PNG or SVG)
+  - **CAD Z-Up Standard**: Enforces mechanical CAD conventions ($Z$ vertical, $XY$ ground plane) with dynamic RGB coordinate triads. See [Coordinate Systems and Rendering Guide](docs/coordinate_systems_and_rendering.md).
   - Multiple camera angles: isometric, front, back, top, bottom, left, right
   - Multi-view mode for complex models
   - Configurable image dimensions
