@@ -355,7 +355,12 @@ def test_export_replaces_destination_symlink_atomically(tmp_path):
     original = tmp_path / "original.step"
     original.write_text("original data")
     link = tmp_path / "link.step"
-    link.symlink_to(original)
+    try:
+        link.symlink_to(original)
+    except OSError as e:
+        if getattr(e, 'winerror', None) == 1314:
+            pytest.skip("Symlink creation requires elevated privileges on Windows")
+        raise
     result = handle_export(ASSEMBLY_CODE, str(link))
     assert result.error is None, result.error
     assert result.filename == str(link)

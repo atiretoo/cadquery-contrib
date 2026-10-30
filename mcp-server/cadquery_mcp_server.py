@@ -39,7 +39,11 @@ Project configuration in Claude Code (.mcp.json in the project root):
 
 import asyncio
 import base64
+import json
+import sys
 from typing import Any
+
+import anyio
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -118,6 +122,11 @@ async def list_tools() -> list[Tool]:
                     "show_hidden": {
                         "type": "boolean",
                         "description": "Whether to show hidden lines in SVG (default: true); unused for PNG.",
+                        "default": True,
+                    },
+                    "show_axes": {
+                        "type": "boolean",
+                        "description": "Whether to show the 3D coordinate triad indicator (default: true).",
                         "default": True,
                     },
                 },
@@ -220,6 +229,7 @@ async def _render_tool(arguments: dict[str, Any]) -> ToolResponse:
         height=arguments.get("height", 600),
         show_hidden=arguments.get("show_hidden", True),
         image_format=arguments.get("image_format", "png"),
+        show_axes=arguments.get("show_axes", True),
     )
 
     if result.error:
@@ -275,9 +285,52 @@ async def _export_tool(arguments: dict[str, Any]) -> ToolResponse:
     return [TextContent(type="text", text=f"Exported to: {result.filename}")]
 
 
+class InterceptingStdin:
+    """Wrap anyio AsyncFile to intercept client probes (e.g. Antigravity server/discover)."""
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        line = await self.readline()
+        if not line:
+            raise StopAsyncIteration
+        return line
+
+    async def readline(self):
+        while True:
+            line = await self._wrapped.readline()
+            if not line:
+                return line
+            try:
+                data = json.loads(line)
+                if data.get("method") == "server/discover":
+                    if "id" in data:
+                        response = {
+                            "jsonrpc": "2.0",
+                            "id": data["id"],
+                            "result": {"status": "ok"}
+                        }
+                        sys.stdout.buffer.write((json.dumps(response) + "\n").encode("utf-8"))
+                        sys.stdout.buffer.flush()
+                    continue
+            except Exception:
+                pass
+            return line
+
+
 async def main():
     """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
+    from io import TextIOWrapper
+    raw_stdin = TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
+    original_stdin = anyio.wrap_file(raw_stdin)
+    patched_stdin = InterceptingStdin(original_stdin)
+    async with stdio_server(stdin=patched_stdin) as (read_stream, write_stream):
         await server.run(
             read_stream,
             write_stream,

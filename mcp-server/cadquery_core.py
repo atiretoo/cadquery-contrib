@@ -36,14 +36,14 @@ from cadquery.occ_impl.exporters import export
 
 # Standard view projection directions
 VIEWS = {
-    "isometric": (-1.75, 1.1, 5),      # Default isometric view
+    "isometric": (-1.0, -1.0, 1.0),     # Standard CAD isometric view (Z-up)
     "front": (0, -1, 0),                # Looking at XZ plane from -Y
     "back": (0, 1, 0),                  # Looking at XZ plane from +Y
     "top": (0, 0, 1),                   # Looking at XY plane from +Z
     "bottom": (0, 0, -1),               # Looking at XY plane from -Z
     "left": (-1, 0, 0),                 # Looking at YZ plane from -X
     "right": (1, 0, 0),                 # Looking at YZ plane from +X
-    "isometric_back": (1.75, -1.1, 5),  # Isometric from opposite corner
+    "isometric_back": (1.0, 1.0, 1.0),  # Isometric from opposite corner
 }
 
 MULTI_VIEW_ANGLES = ["isometric", "front", "top", "right"]
@@ -210,12 +210,14 @@ def render_svg(shape, view_name: str, width: int, height: int,
     return getSVG(_to_occ_shape(shape), opts=opts)
 
 
-def render_png(shape, view_name: str, width: int, height: int) -> bytes:
+def render_png(shape, view_name: str, width: int, height: int, show_axes: bool = True) -> bytes:
     """Render a shaded PNG offscreen, preserving assembly colors and locations."""
     from cadquery.occ_impl.assembly import toVTKAssy
     from vtkmodules.vtkRenderingCore import (
-        vtkRenderer, vtkRenderWindow, vtkWindowToImageFilter,
+        vtkRenderer, vtkRenderWindow, vtkWindowToImageFilter, vtkRenderWindowInteractor,
     )
+    from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
+    from vtkmodules.vtkRenderingAnnotation import vtkAxesActor
     from vtkmodules.vtkIOImage import vtkPNGWriter
     import vtkmodules.vtkRenderingOpenGL2  # noqa: F401 - registers the rendering backend
 
@@ -245,6 +247,30 @@ def render_png(shape, view_name: str, width: int, height: int) -> bytes:
         camera.ParallelProjectionOn()
         renderer.ResetCamera()
         renderer.ResetCameraClippingRange()
+
+        interactor = vtkRenderWindowInteractor()
+        interactor.SetRenderWindow(window)
+
+        if show_axes:
+            axes = vtkAxesActor()
+            for actor, col in [
+                (axes.GetXAxisCaptionActor2D(), (0.8, 0.1, 0.1)),
+                (axes.GetYAxisCaptionActor2D(), (0.1, 0.55, 0.1)),
+                (axes.GetZAxisCaptionActor2D(), (0.1, 0.35, 0.8)),
+            ]:
+                tp = actor.GetCaptionTextProperty()
+                tp.ShadowOff()
+                tp.ItalicOff()
+                tp.BoldOn()
+                tp.SetColor(*col)
+
+            widget = vtkOrientationMarkerWidget()
+            widget.SetOrientationMarker(axes)
+            widget.SetInteractor(interactor)
+            widget.SetViewport(0.0, 0.0, 0.22, 0.22)
+            widget.SetEnabled(1)
+            widget.InteractiveOff()
+
         window.Render()
         capture = vtkWindowToImageFilter()
         capture.SetInput(window)
@@ -266,7 +292,7 @@ def render_png(shape, view_name: str, width: int, height: int) -> bytes:
 def handle_render(code: str, *, view: str = "isometric",
                   multi_view: bool = False, width: int = 800,
                   height: int = 600, show_hidden: bool = True,
-                  image_format: str = "svg") -> RenderResult:
+                  image_format: str = "svg", show_axes: bool = True) -> RenderResult:
     """Execute CadQuery code and return SVGs or colored PNGs."""
     try:
         if image_format not in ("svg", "png"):
@@ -282,7 +308,7 @@ def handle_render(code: str, *, view: str = "isometric",
 
         names = list(MULTI_VIEW_ANGLES) if multi_view else [view]
         if image_format == "png":
-            images = [render_png(shape, name, width, height) for name in names]
+            images = [render_png(shape, name, width, height, show_axes) for name in names]
             mime_type = "image/png"
         else:
             images = [

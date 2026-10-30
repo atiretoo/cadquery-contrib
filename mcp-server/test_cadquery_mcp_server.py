@@ -510,3 +510,38 @@ def test_inspection_omits_incomplete_topology(monkeypatch):
     assert "Volume:" in result.text
     assert "Topology:" not in result.text
     assert "Solids:" not in result.text
+
+
+def test_render_png_axes_option():
+    """Verify render_png works with show_axes True and False."""
+    from cadquery_core import handle_render
+
+    code = "import cadquery as cq\nresult = cq.Workplane('XY').box(5, 5, 5)"
+    res_with_axes = handle_render(code, image_format="png", show_axes=True)
+    assert res_with_axes.error is None
+    assert len(res_with_axes.images) == 1
+    assert res_with_axes.mime_type == "image/png"
+
+    res_without_axes = handle_render(code, image_format="png", show_axes=False)
+    assert res_without_axes.error is None
+    assert len(res_without_axes.images) == 1
+    assert res_without_axes.mime_type == "image/png"
+
+
+def test_intercepting_stdin_server_discover():
+    """Verify InterceptingStdin captures server/discover and passes through normal input."""
+    import io
+    import json
+    import anyio
+    from cadquery_mcp_server import InterceptingStdin
+
+    raw = io.BytesIO(b'{"jsonrpc":"2.0","id":1,"method":"server/discover"}\n{"jsonrpc":"2.0","id":2,"method":"initialize"}\n')
+    wrapped = anyio.wrap_file(raw)
+    interceptor = InterceptingStdin(wrapped)
+
+    # First line should be consumed and interceptor should continue to next line
+    async def read_next():
+        return await interceptor.readline()
+
+    line = asyncio.run(read_next())
+    assert json.loads(line)["method"] == "initialize"
