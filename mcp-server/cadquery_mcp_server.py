@@ -129,6 +129,16 @@ async def list_tools() -> list[Tool]:
                         "description": "Whether to show the 3D coordinate triad indicator (default: true).",
                         "default": True,
                     },
+                    "show_edges": {
+                        "type": "boolean",
+                        "description": "Whether to draw visible boundary and feature edge outlines on shaded solids in PNG (default: true).",
+                        "default": True,
+                    },
+                    "background_card": {
+                        "type": "boolean",
+                        "description": "Whether to include an opaque card background in SVG for visibility in dark/light themes (default: true).",
+                        "default": True,
+                    },
                 },
                 "required": ["code"],
                 "additionalProperties": False,
@@ -230,6 +240,8 @@ async def _render_tool(arguments: dict[str, Any]) -> ToolResponse:
         show_hidden=arguments.get("show_hidden", True),
         image_format=arguments.get("image_format", "png"),
         show_axes=arguments.get("show_axes", True),
+        show_edges=arguments.get("show_edges", True),
+        background_card=arguments.get("background_card", True),
     )
 
     if result.error:

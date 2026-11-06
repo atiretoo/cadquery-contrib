@@ -528,6 +528,38 @@ def test_render_png_axes_option():
     assert res_without_axes.mime_type == "image/png"
 
 
+def test_render_png_edges_option():
+    """Verify render_png works with show_edges True and False."""
+    from cadquery_core import handle_render
+
+    code = "import cadquery as cq\nresult = cq.Workplane('XY').box(5, 5, 5)"
+    res_with_edges = handle_render(code, image_format="png", show_edges=True)
+    assert res_with_edges.error is None
+    assert len(res_with_edges.images) == 1
+    assert res_with_edges.mime_type == "image/png"
+
+    res_without_edges = handle_render(code, image_format="png", show_edges=False)
+    assert res_without_edges.error is None
+    assert len(res_without_edges.images) == 1
+    assert res_without_edges.mime_type == "image/png"
+
+
+def test_render_svg_background_card_option():
+    """Verify render_svg inserts background card when requested."""
+    from cadquery_core import handle_render
+
+    code = "import cadquery as cq\nresult = cq.Workplane('XY').box(5, 5, 5)"
+    res_with_card = handle_render(code, image_format="svg", background_card=True)
+    assert res_with_card.error is None
+    svg_str = res_with_card.images[0].decode("utf-8")
+    assert '<rect width="100%" height="100%" fill="#ffffff"' in svg_str
+
+    res_without_card = handle_render(code, image_format="svg", background_card=False)
+    assert res_without_card.error is None
+    svg_no_card = res_without_card.images[0].decode("utf-8")
+    assert '<rect width="100%" height="100%" fill="#ffffff"' not in svg_no_card
+
+
 def test_intercepting_stdin_server_discover():
     """Verify InterceptingStdin captures server/discover and passes through normal input."""
     import io

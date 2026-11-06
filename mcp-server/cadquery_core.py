@@ -197,7 +197,7 @@ def _execute_code(code: str):
 
 
 def render_svg(shape, view_name: str, width: int, height: int,
-               show_hidden: bool = True) -> str:
+               show_hidden: bool = True, background_card: bool = True) -> str:
     """Render an OCC shape to an SVG string from a specific view angle."""
     opts = {
         "width": width,
@@ -207,10 +207,19 @@ def render_svg(shape, view_name: str, width: int, height: int,
         "showHidden": show_hidden,
     }
 
-    return getSVG(_to_occ_shape(shape), opts=opts)
+    svg_str = getSVG(_to_occ_shape(shape), opts=opts)
+    if background_card:
+        import re
+        match = re.search(r"<svg[^>]*>", svg_str, re.DOTALL)
+        if match:
+            insert_pos = match.end()
+            bg_rect = '\n  <rect width="100%" height="100%" fill="#ffffff" rx="8" stroke="#cbd5e1" stroke-width="2"/>'
+            svg_str = svg_str[:insert_pos] + bg_rect + svg_str[insert_pos:]
+    return svg_str
 
 
-def render_png(shape, view_name: str, width: int, height: int, show_axes: bool = True) -> bytes:
+def render_png(shape, view_name: str, width: int, height: int,
+               show_axes: bool = True, show_edges: bool = True) -> bytes:
     """Render a shaded PNG offscreen, preserving assembly colors and locations."""
     from cadquery.occ_impl.assembly import toVTKAssy
     from vtkmodules.vtkRenderingCore import (
@@ -230,7 +239,9 @@ def render_png(shape, view_name: str, width: int, height: int, show_axes: bool =
         wire_only = not part.Faces()
         rgba = color.toTuple() if color is not None else (1.0, 1.0, 1.0, 1.0)
         leaf = cq.Assembly(part, loc=location, color=color)
-        for actor in toVTKAssy(leaf, edges=wire_only, edgecolor=rgba, tolerance=0.1):
+        edges_to_draw = wire_only or show_edges
+        edge_color = rgba if wire_only else (0.15, 0.15, 0.2, 1.0)
+        for actor in toVTKAssy(leaf, edges=edges_to_draw, edgecolor=edge_color, tolerance=0.1):
             if wire_only:
                 actor.GetProperty().SetOpacity(rgba[3])
             renderer.AddActor(actor)
@@ -292,7 +303,8 @@ def render_png(shape, view_name: str, width: int, height: int, show_axes: bool =
 def handle_render(code: str, *, view: str = "isometric",
                   multi_view: bool = False, width: int = 800,
                   height: int = 600, show_hidden: bool = True,
-                  image_format: str = "svg", show_axes: bool = True) -> RenderResult:
+                  image_format: str = "svg", show_axes: bool = True,
+                  show_edges: bool = True, background_card: bool = True) -> RenderResult:
     """Execute CadQuery code and return SVGs or colored PNGs."""
     try:
         if image_format not in ("svg", "png"):
@@ -308,11 +320,14 @@ def handle_render(code: str, *, view: str = "isometric",
 
         names = list(MULTI_VIEW_ANGLES) if multi_view else [view]
         if image_format == "png":
-            images = [render_png(shape, name, width, height, show_axes) for name in names]
+            images = [
+                render_png(shape, name, width, height, show_axes, show_edges)
+                for name in names
+            ]
             mime_type = "image/png"
         else:
             images = [
-                render_svg(shape, name, width, height, show_hidden).encode("utf-8")
+                render_svg(shape, name, width, height, show_hidden, background_card).encode("utf-8")
                 for name in names
             ]
             mime_type = "image/svg+xml"
