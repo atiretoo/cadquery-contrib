@@ -221,7 +221,7 @@ def test_stdio_round_trip_all_tools_and_error_flags(tmp_path):
                 await client.initialize()
                 tools = await client.list_tools()
                 assert {tool.name for tool in tools.tools} == {
-                    "render", "inspect", "get_parameters", "export",
+                    "render", "inspect", "get_parameters", "export", "analyze_stl", "compare_mesh",
                 }
                 for exit_code in (0, 7, "stop building"):
                     exited = await client.call_tool("inspect", {

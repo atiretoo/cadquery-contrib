@@ -4,11 +4,14 @@ Tests for the CadQuery MCP server and CAD operations.
 These tests verify that:
 - The core module executes CadQuery scripts correctly
 - SVG rendering works correctly (headless)
-- Geometry inspection returns correct values
+- Geometry inspection returns correct values, BRep validity, and topology audits
+- Boolean volume guard validates boolean identities
+- Multi-view rendering and 2x2 PNG contact sheets work
+- 2D cross-section slicing and grid rendering work
+- STL BRep segmentation (analyze_stl) and 3-axis voxel comparison (compare_mesh) work
 - Parameter extraction works
 - Export functionality works
 - Error handling is correct
-- Multi-view rendering works
 - The MCP server dispatches to core correctly
 
 Run with: pytest test_cadquery_mcp_server.py -v
@@ -17,6 +20,7 @@ Run with: pytest test_cadquery_mcp_server.py -v
 import pytest
 import asyncio
 import base64
+import struct
 import tempfile
 import os
 from types import SimpleNamespace
@@ -195,6 +199,9 @@ class TestCore:
         assert "Faces: 6" in result.text
         assert "Edges: 12" in result.text
         assert "Vertices: 8" in result.text
+        assert "Valid (BRepCheck): Yes" in result.text
+        assert "Closed Solids: 1/1" in result.text
+        assert "Audit Warnings: None" in result.text
 
     def test_inspect_with_show_object(self):
         """Test inspect works with show_object() syntax."""
@@ -341,6 +348,8 @@ class TestMCPServer:
         assert "inspect" in tool_names
         assert "get_parameters" in tool_names
         assert "export" in tool_names
+        assert "analyze_stl" in tool_names
+        assert "compare_mesh" in tool_names
 
     def test_render_returns_image_content(self):
         """Test that MCP render returns ImageContent with base64 SVG."""
@@ -577,3 +586,161 @@ def test_intercepting_stdin_server_discover():
 
     line = asyncio.run(read_next())
     assert json.loads(line)["method"] == "initialize"
+
+
+# ============================================================================
+# ScanRuler Integration Tests (Audit, Boolean Guard, Contact Sheet, Section, STL)
+# ============================================================================
+
+def test_inspect_topology_audit_warnings():
+    """Verify handle_inspect detects tiny/sliver faces and short edges."""
+    from cadquery_core import handle_inspect
+
+    # A tiny box (0.02 x 10 x 10) has 0.02 mm edges (< 0.1 mm) and narrow faces
+    code = "import cadquery as cq\nresult = cq.Workplane('XY').box(0.02, 10, 10)"
+    result = handle_inspect(code)
+    assert result.error is None
+    assert "Valid (BRepCheck): Yes" in result.text
+    assert "Closed Solids: 1/1" in result.text
+    assert "Audit Warnings:" in result.text
+    assert "Short edge" in result.text
+
+
+def test_check_boolean_volume_guard():
+    """Verify check_boolean_volume (ported from booleanGuard.ts) detects lost/gained volume."""
+    from cadquery_core import check_boolean_volume, volume_guard
+
+    assert volume_guard is check_boolean_volume
+
+    # Valid union / subtract / intersect / join / cut
+    assert check_boolean_volume("union", 100.0, 50.0, 130.0, common_vol=20.0) is None
+    assert check_boolean_volume("subtract", 100.0, 30.0, 80.0, common_vol=20.0) is None
+    assert check_boolean_volume("intersect", 100.0, 30.0, 20.0) is None
+    assert check_boolean_volume("join", result_vol=150.0, parts=[100.0, 50.0]) is None
+    assert check_boolean_volume("cut", body_vol=100.0, result_vol=75.0) is None
+
+    # Refusals
+    assert "lost volume" in check_boolean_volume("union", 100.0, 50.0, 80.0)
+    assert "made volume" in check_boolean_volume("union", 100.0, 50.0, 160.0)
+    assert "gained volume" in check_boolean_volume("subtract", 100.0, 30.0, 110.0)
+    assert "took more than the tool holds" in check_boolean_volume("subtract", 100.0, 30.0, 60.0)
+    assert "more than the smaller holds" in check_boolean_volume("intersect", 100.0, 30.0, 35.0)
+
+
+def test_render_multi_view_contact_sheet():
+    """Verify contact_sheet=True composites 4 views into a single 2x2 PNG image."""
+    from cadquery_core import handle_render
+    from cadquery_mcp_server import _render_tool
+
+    code = "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 20, 30)"
+    res = handle_render(
+        code,
+        image_format="png",
+        multi_view=True,
+        contact_sheet=True,
+        width=200,
+        height=150,
+    )
+    assert res.error is None, res.error
+    assert res.mime_type == "image/png"
+    assert res.view_names == ["contact_sheet"]
+    assert len(res.images) == 1
+
+    data = res.images[0]
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    w, h = struct.unpack(">II", data[16:24])
+    assert (w, h) == (400, 300)
+
+    # Also test via MCP _render_tool
+    mcp_res = asyncio.run(_render_tool({
+        "code": code,
+        "image_format": "png",
+        "multi_view": True,
+        "contact_sheet": True,
+        "width": 200,
+        "height": 150,
+    }))
+    assert len(mcp_res) == 1
+    assert mcp_res[0].type == "image"
+    assert mcp_res[0].mimeType == "image/png"
+
+
+def test_cross_section_render_and_inspect():
+    """Verify 2D cross-section slicing in handle_render (SVG & PNG) and handle_inspect."""
+    from cadquery_core import handle_render, handle_inspect
+
+    code = (
+        "import cadquery as cq\n"
+        "result = cq.Workplane('XY').box(20, 30, 10).faces('>Z').workplane().hole(8)"
+    )
+
+    # 1. SVG cross-section
+    res_svg = handle_render(code, image_format="svg", section_axis="Z", section_offset=0.0)
+    assert res_svg.error is None, res_svg.error
+    assert res_svg.mime_type == "image/svg+xml"
+    assert res_svg.view_names == ["section_z_0"]
+    svg_text = res_svg.images[0].decode("utf-8")
+    assert "Cross-Section Z = 0 mm" in svg_text
+    assert 'class="grid"' in svg_text
+    assert 'class="section-edges"' in svg_text
+
+    # 2. PNG cross-section
+    res_png = handle_render(code, image_format="png", section_axis="Z", section_offset=0.0, width=320, height=240)
+    assert res_png.error is None, res_png.error
+    assert res_png.mime_type == "image/png"
+    assert res_png.images[0].startswith(b"\x89PNG\r\n\x1a\n")
+
+    # 3. Inspect cross-section
+    insp = handle_inspect(code, section_axis="Z", section_offset=0.0)
+    assert insp.error is None, insp.error
+    assert "Cross-Section (Z = 0.0000):" in insp.text
+    assert "X: -10.0000 to 10.0000 (size: 20.0000)" in insp.text
+    assert "Y: -15.0000 to 15.0000 (size: 30.0000)" in insp.text
+
+    # 4. Out-of-bounds plane returns clean error
+    miss = handle_render(code, image_format="svg", section_axis="Z", section_offset=50.0)
+    assert miss.error is not None
+    assert "does not intersect" in miss.error
+
+
+def test_analyze_stl_and_compare_mesh(tmp_path):
+    """Verify analyze_stl and compare_mesh tools segment BRep faces and detect voxel discrepancies."""
+    from cadquery_core import handle_export, handle_analyze_stl, handle_compare_mesh
+    from cadquery_mcp_server import call_tool
+
+    ref_code = (
+        "import cadquery as cq\n"
+        "result = cq.Workplane('XY').box(20, 20, 10).faces('>Z').workplane().hole(8)"
+    )
+    ref_stl = tmp_path / "reference.stl"
+    exp = handle_export(ref_code, str(ref_stl))
+    assert exp.error is None, exp.error
+
+    # 1. Test analyze_stl
+    analysis = handle_analyze_stl(str(ref_stl))
+    assert analysis.error is None, analysis.error
+    assert "Clean CAD export" in analysis.text
+    assert "2.5D along z:" in analysis.text
+    assert "cyl  hole R" in analysis.text
+    assert "recommend:" in analysis.text
+
+    mcp_analysis = asyncio.run(call_tool("analyze_stl", {"stl_path": str(ref_stl)}))
+    assert not isinstance(mcp_analysis, SimpleNamespace)
+    assert mcp_analysis[0].type == "text"
+    assert "Clean CAD export" in mcp_analysis[0].text
+
+    # 2. Test compare_mesh with candidate missing the hole (has EXTRA material in the hole)
+    candidate_code = "import cadquery as cq\nresult = cq.Workplane('XY').box(20, 20, 10)"
+    comp = handle_compare_mesh(candidate_code, str(ref_stl), voxel_size=0.5)
+    assert comp.error is None, comp.error
+    assert "volume: mesh" in comp.text
+    assert "EXTRA (model has, mesh not):" in comp.text
+    assert "box" in comp.text
+
+    mcp_comp = asyncio.run(call_tool("compare_mesh", {
+        "code": candidate_code,
+        "reference_stl_path": str(ref_stl),
+        "voxel_size": 0.5,
+    }))
+    assert mcp_comp[0].type == "text"
+    assert "EXTRA (model has, mesh not):" in mcp_comp[0].text

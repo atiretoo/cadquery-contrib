@@ -7,19 +7,20 @@ name = "cadquery-mcp"
 version = "0.2.0"
 description = "MCP server for CadQuery - enables AI assistants to create and inspect 3D CAD models"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = {text = "AGPL-3.0-or-later"}
 authors = [
     {name = "CadQuery Development Team"},
+    {name = "CNC Kitchen / ScanRuler Contributors"},
 ]
 maintainers = [
     {name = "Albert Wang", email = "amwang217@gmail.com"},
 ]
-keywords = ["cadquery", "cad", "mcp", "ai", "claude", "3d-modeling"]
+keywords = ["cadquery", "cad", "mcp", "ai", "claude", "3d-modeling", "stl", "reverse-engineering"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -32,15 +33,18 @@ requires-python = ">=3.10"
 dependencies = [
     "cadquery>=2.8.0,<3",
     "mcp>=1.30.0,<2",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "Pillow>=9.0.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/CadQuery/cadquery-contrib"
-Repository = "https://github.com/CadQuery/cadquery-contrib"
-Documentation = "https://github.com/CadQuery/cadquery-contrib/tree/master/mcp-server"
+Homepage = "https://github.com/atiretoo/cadquery-contrib"
+Repository = "https://github.com/atiretoo/cadquery-contrib"
+Documentation = "https://github.com/atiretoo/cadquery-contrib/tree/master/mcp-server"
 
 [project.scripts]
 cadquery-mcp = "cadquery_mcp_server:run"
 
 [tool.setuptools]
-py-modules = ["cadquery_core", "cadquery_mcp_server"]
+py-modules = ["cadquery_core", "cadquery_mcp_server", "stl_analysis"]

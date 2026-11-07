@@ -1,22 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) CadQuery Development Team.
+# Copyright (c) 2025-2026 CNC Kitchen / ScanRuler Contributors (https://github.com/CNCKitchen/ScanRuler).
+# Copyright (c) 2026 CadQuery Contrib / MCP Server Contributors.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
 
 """
 CadQuery MCP (Model Context Protocol) Server.
 
 This module provides an MCP server that allows AI assistants like Claude
-to execute CadQuery scripts and receive rendered images of 3D models.
+to execute CadQuery scripts, receive rendered images or 2D cross-sections of 3D models,
+audit BRep topology, and reverse-engineer/compare STL meshes.
 
 Usage:
     Run as a standalone server:
@@ -55,6 +52,8 @@ from cadquery_core import (
     handle_inspect,
     handle_get_parameters,
     handle_export,
+    handle_analyze_stl,
+    handle_compare_mesh,
 )
 
 
@@ -79,7 +78,10 @@ async def list_tools() -> list[Tool]:
                 "Example: result = cq.Workplane('XY').box(1, 2, 3). "
                 "Returns shaded PNG by default, preserving assembly colors and locations. "
                 "Use image_format='svg' for a monochrome line drawing. "
-                "Use 'view' to specify camera angle, or 'multi_view' to get multiple angles at once."
+                "Use 'view' to specify camera angle, or 'multi_view' (optionally with 'contact_sheet'=true) "
+                "to get multiple angles at once. "
+                "Use 'section_axis' ('X', 'Y', or 'Z') and 'section_offset' (mm) to slice the model and "
+                "render a 2D cross-section with a millimeter coordinate grid and bounding dimensions."
             ),
             inputSchema={
                 "type": "object",
@@ -103,6 +105,11 @@ async def list_tools() -> list[Tool]:
                     "multi_view": {
                         "type": "boolean",
                         "description": "If true, returns multiple images from different angles (isometric, front, top, right). Useful for complex models.",
+                        "default": False,
+                    },
+                    "contact_sheet": {
+                        "type": "boolean",
+                        "description": "When multi_view=true and image_format='png', composite the 4 views into a single 2x2 contact sheet PNG with labels (default: false).",
                         "default": False,
                     },
                     "width": {
@@ -139,6 +146,16 @@ async def list_tools() -> list[Tool]:
                         "description": "Whether to include an opaque card background in SVG for visibility in dark/light themes (default: true).",
                         "default": True,
                     },
+                    "section_axis": {
+                        "type": "string",
+                        "enum": ["X", "Y", "Z", "x", "y", "z"],
+                        "description": "Optional cross-section plane axis ('X', 'Y', or 'Z'). Slices the model at section_offset and renders a 2D cross-section with a millimeter grid.",
+                    },
+                    "section_offset": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Plane offset in mm along section_axis when slicing a 2D cross-section (default: 0.0).",
+                    },
                 },
                 "required": ["code"],
                 "additionalProperties": False,
@@ -148,7 +165,9 @@ async def list_tools() -> list[Tool]:
             name="inspect",
             description=(
                 "Execute CadQuery code and return geometry information about the resulting shape, "
-                "including bounding box dimensions, volume, surface area, and center of mass."
+                "including bounding box dimensions, volume, surface area, center of mass, "
+                "BRepCheck validity, closed solid count, topology audit warnings (tiny/sliver faces, short edges), "
+                "and optional 2D cross-section metrics."
             ),
             inputSchema={
                 "type": "object",
@@ -156,6 +175,16 @@ async def list_tools() -> list[Tool]:
                     "code": {
                         "type": "string",
                         "description": "CadQuery Python code to execute",
+                    },
+                    "section_axis": {
+                        "type": "string",
+                        "enum": ["X", "Y", "Z", "x", "y", "z"],
+                        "description": "Optional cross-section axis ('X', 'Y', or 'Z') to inspect 2D slice dimensions at section_offset.",
+                    },
+                    "section_offset": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Cross-section offset in mm along section_axis (default: 0.0).",
                     },
                 },
                 "required": ["code"],
@@ -208,6 +237,54 @@ async def list_tools() -> list[Tool]:
                 "additionalProperties": False,
             },
         ),
+        Tool(
+            name="analyze_stl",
+            description=(
+                "Segment an STL mesh into exact BRep primitive faces (planes, cylinders, cones, spheres, tori), "
+                "classify whether it is a clean CAD export or noisy scan, identify 2.5D build levels and coaxial "
+                "hole/boss axes, and recommend a CadQuery rebuild strategy (slabs vs revolve)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "stl_path": {
+                        "type": "string",
+                        "description": "Path to the STL file to analyze",
+                    },
+                },
+                "required": ["stl_path"],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="compare_mesh",
+            description=(
+                "Execute CadQuery code, export it to a temporary STL mesh, and run a 3-axis ray-cast voxel "
+                "comparison against a reference STL file. Reports volume difference (%), excess/missing volume (mm^3), "
+                "and spatial bounding boxes of the largest discrepancy clusters."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "CadQuery Python code to execute and compare",
+                    },
+                    "reference_stl_path": {
+                        "type": "string",
+                        "description": "Path to the reference STL file",
+                    },
+                    "voxel_size": {
+                        "type": "number",
+                        "default": 0.2,
+                        "exclusiveMinimum": 0,
+                        "description": "Voxel grid spacing in mm for 3-axis ray-cast occupancy comparison (default: 0.2).",
+                    },
+                },
+                "required": ["code", "reference_stl_path"],
+                "additionalProperties": False,
+            },
+        ),
     ]
 
 
@@ -224,6 +301,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> ToolResponse:
             return await _get_parameters_tool(arguments)
         elif name == "export":
             return await _export_tool(arguments)
+        elif name == "analyze_stl":
+            return await _analyze_stl_tool(arguments)
+        elif name == "compare_mesh":
+            return await _compare_mesh_tool(arguments)
         return _error_response(f"Unknown tool: {name}")
     except Exception as e:
         return _error_response(f"Error: {type(e).__name__}: {e}")
@@ -235,6 +316,7 @@ async def _render_tool(arguments: dict[str, Any]) -> ToolResponse:
         arguments["code"],
         view=arguments.get("view", "isometric"),
         multi_view=arguments.get("multi_view", False),
+        contact_sheet=arguments.get("contact_sheet", False),
         width=arguments.get("width", 800),
         height=arguments.get("height", 600),
         show_hidden=arguments.get("show_hidden", True),
@@ -242,6 +324,8 @@ async def _render_tool(arguments: dict[str, Any]) -> ToolResponse:
         show_axes=arguments.get("show_axes", True),
         show_edges=arguments.get("show_edges", True),
         background_card=arguments.get("background_card", True),
+        section_axis=arguments.get("section_axis"),
+        section_offset=arguments.get("section_offset", 0.0),
     )
 
     if result.error:
@@ -265,7 +349,11 @@ async def _render_tool(arguments: dict[str, Any]) -> ToolResponse:
 
 async def _inspect_tool(arguments: dict[str, Any]) -> ToolResponse:
     """Execute CadQuery code and return geometry information."""
-    result = handle_inspect(arguments["code"])
+    result = handle_inspect(
+        arguments["code"],
+        section_axis=arguments.get("section_axis"),
+        section_offset=arguments.get("section_offset", 0.0),
+    )
 
     if result.error:
         return _error_response(result.error)
@@ -295,6 +383,30 @@ async def _export_tool(arguments: dict[str, Any]) -> ToolResponse:
         return _error_response(result.error)
 
     return [TextContent(type="text", text=f"Exported to: {result.filename}")]
+
+
+async def _analyze_stl_tool(arguments: dict[str, Any]) -> ToolResponse:
+    """Analyze an STL file and return BRep segmentation report."""
+    result = handle_analyze_stl(arguments["stl_path"])
+
+    if result.error:
+        return _error_response(result.error)
+
+    return [TextContent(type="text", text=result.text)]
+
+
+async def _compare_mesh_tool(arguments: dict[str, Any]) -> ToolResponse:
+    """Execute CadQuery code and compare against a reference STL mesh."""
+    result = handle_compare_mesh(
+        arguments["code"],
+        arguments["reference_stl_path"],
+        arguments.get("voxel_size", 0.2),
+    )
+
+    if result.error:
+        return _error_response(result.error)
+
+    return [TextContent(type="text", text=result.text)]
 
 
 class InterceptingStdin:

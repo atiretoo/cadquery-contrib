@@ -98,3 +98,10 @@ A place to share CadQuery scripts, modules, tutorials and projects
 
 * [Ex000 Start Here.ipynb](tutorials/Ex000%20Start%20Here.ipynb) - iPython notebook that is the entry point for a set of CadQuery tutorials
 * [Ex001 Simple Block.ipynb](tutorials/Ex001%20Simple%20Block.ipynb) - iPython notebook that shows how to create an extremely simple block
+
+## License & Attribution
+
+This repository is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)** — see [LICENSE](LICENSE) for full terms.
+
+* Upstream [`CadQuery/cadquery-contrib`](https://github.com/CadQuery/cadquery-contrib) examples, tutorials, and initial MCP server contributions are preserved under their original notices (Copyright (c) 2018 Dave Cowden / CadQuery Development Team; see [LICENSE-MIT](LICENSE-MIT) and the `upstream_core` branch).
+* Advanced CAD/MCP topology auditing, boolean volume guards, 2D cross-section inspection, and STL BRep segmentation / 3-axis ray-cast voxel comparison in [`mcp-server/`](mcp-server/) incorporate algorithms adapted from [`CNCKitchen/ScanRuler`](https://github.com/CNCKitchen/ScanRuler) under AGPL-3.0.
